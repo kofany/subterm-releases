@@ -1,0 +1,123 @@
+name: Publish to AUR (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (without v prefix, e.g., 0.2.23)'
+        required: true
+
+jobs:
+  publish-aur:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Download and get SHA256
+        id: sha256
+        run: |
+          URL="https://github.com/kofany/subterm-releases/releases/download/v${VERSION}/subterm-bin-${VERSION}-1-x86_64.pkg.tar.zst"
+          curl -sLO "$URL"
+          SHA256=$(sha256sum "subterm-bin-${VERSION}-1-x86_64.pkg.tar.zst" | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Generate PKGBUILD
+        env:
+          SHA256: ${{ steps.sha256.outputs.sha256 }}
+        run: |
+          cat > PKGBUILD << EOF
+          # Maintainer: kofany <j@dabrowski.biz>
+          pkgname=subterm-bin
+          pkgver=${VERSION}
+          pkgrel=1
+          pkgdesc="Cross-platform SSH and SFTP client with GPU-accelerated terminal rendering"
+          arch=('x86_64')
+          url="https://github.com/kofany/subterm-releases"
+          license=('custom:proprietary')
+          depends=(
+              'webkit2gtk-4.1'
+              'gtk3'
+              'glib2'
+              'gdk-pixbuf2'
+              'cairo'
+              'pango'
+              'libsoup3'
+              'openssl'
+              'hicolor-icon-theme'
+          )
+          optdepends=(
+              'libappindicator-gtk3: system tray support'
+              'gst-plugins-good: video/audio support'
+          )
+          provides=('subterm')
+          conflicts=('subterm')
+          options=('!strip' '!debug')
+          source=("subterm-bin-\${pkgver}.pkg.tar.zst::https://github.com/kofany/subterm-releases/releases/download/v\${pkgver}/subterm-bin-\${pkgver}-1-x86_64.pkg.tar.zst")
+          sha256sums=('${SHA256}')
+          noextract=("subterm-bin-\${pkgver}.pkg.tar.zst")
+
+          package() {
+              cd "\${srcdir}"
+              bsdtar -xf "subterm-bin-\${pkgver}.pkg.tar.zst" -C "\${pkgdir}/"
+              rm -f "\${pkgdir}/.PKGINFO" "\${pkgdir}/.BUILDINFO" "\${pkgdir}/.MTREE" 2>/dev/null || true
+          }
+          EOF
+
+      - name: Generate .SRCINFO
+        env:
+          SHA256: ${{ steps.sha256.outputs.sha256 }}
+        run: |
+          cat > .SRCINFO << EOF
+          pkgbase = subterm-bin
+          	pkgdesc = Cross-platform SSH and SFTP client with GPU-accelerated terminal rendering
+          	pkgver = ${VERSION}
+          	pkgrel = 1
+          	url = https://github.com/kofany/subterm-releases
+          	arch = x86_64
+          	license = custom:proprietary
+          	depends = webkit2gtk-4.1
+          	depends = gtk3
+          	depends = glib2
+          	depends = gdk-pixbuf2
+          	depends = cairo
+          	depends = pango
+          	depends = libsoup3
+          	depends = openssl
+          	depends = hicolor-icon-theme
+          	optdepends = libappindicator-gtk3: system tray support
+          	optdepends = gst-plugins-good: video/audio support
+          	provides = subterm
+          	conflicts = subterm
+          	options = !strip
+          	options = !debug
+          	noextract = subterm-bin-${VERSION}.pkg.tar.zst
+          	source = subterm-bin-${VERSION}.pkg.tar.zst::https://github.com/kofany/subterm-releases/releases/download/v${VERSION}/subterm-bin-${VERSION}-1-x86_64.pkg.tar.zst
+          	sha256sums = ${SHA256}
+
+          pkgname = subterm-bin
+          EOF
+
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t rsa,ecdsa,ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << EOF
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur
+            User aur
+          EOF
+
+      - name: Clone AUR repo and push
+        run: |
+          git config --global user.name "kofany"
+          git config --global user.email "j@dabrowski.biz"
+          git clone ssh://aur@aur.archlinux.org/subterm-bin.git aur-repo
+          cd aur-repo
+          git checkout -B master origin/master || git checkout -b master
+          cp ../PKGBUILD .
+          cp ../.SRCINFO .
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${VERSION}" || echo "No changes to commit"
+          git push origin master

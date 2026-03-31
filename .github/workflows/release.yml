@@ -26,7 +26,7 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             name: macOS-arm64
-          - platform: macos-13
+          - platform: macos-15-intel
             target: x86_64-apple-darwin
             name: macOS-x64
           - platform: windows-latest
@@ -74,6 +74,12 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
+
+      - name: Workaround hdiutil DMG creation issue on macOS
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          sudo mdutil -a -i off || true
+          sudo killall mds_stores || true
 
       - name: Build Tauri app
         run: bun run tauri build --target ${{ matrix.target }}
